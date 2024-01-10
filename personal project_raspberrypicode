@@ -1,0 +1,108 @@
+#!/usr/bin/env python
+import RPi.GPIO as GPIO
+import paho.mqtt.client as mqtt
+import redis
+import time
+
+# Edit variables to match your environment
+broker_address = "test.mosquitto.org"
+mqtt_topic = "RPIvalue"
+
+redis_host = "redis-13714.c299.asia-northeast1-1.gce.cloud.redislabs.com"
+redis_port = "13714"
+redis_pwd = "julia"
+redis_channel = "sensor_channel"
+
+# Redis setup
+r = redis.Redis(host=redis_host, port=redis_port, password=redis_pwd, db=0)
+redis_pubsub = r.pubsub()
+
+# Set up the MQTT client
+mqtt_client = mqtt.Client("pub5")
+
+# Connect to the MQTT broker
+mqtt_client.connect(broker_address)
+
+ADC_CS  = 12
+ADC_CLK = 13
+ADC_DIO = 11
+
+def setup():
+        GPIO.setwarnings(False)
+        GPIO.setmode(GPIO.BOARD)    #Number GPIOs by its physical location
+        GPIO.setup(ADC_CS, GPIO.OUT)
+        GPIO.setup(ADC_CLK, GPIO.OUT)
+
+def destroy():
+        GPIO.cleanup()
+
+def getResult():     # get ADC result
+        GPIO.setup(ADC_DIO, GPIO.OUT)
+        GPIO.output(ADC_CS, 0)
+
+        GPIO.output(ADC_CLK, 0)
+        GPIO.output(ADC_DIO, 1);  time.sleep(0.000002)
+        GPIO.output(ADC_CLK, 1);  time.sleep(0.000002)
+        GPIO.output(ADC_CLK, 0)
+
+        GPIO.output(ADC_DIO, 1);  time.sleep(0.000002)
+        GPIO.output(ADC_CLK, 1);  time.sleep(0.000002)
+        GPIO.output(ADC_CLK, 0)
+
+        GPIO.output(ADC_DIO, 0);  time.sleep(0.000002)
+
+        GPIO.output(ADC_CLK, 1)
+        GPIO.output(ADC_DIO, 1);  time.sleep(0.000002)
+        GPIO.output(ADC_CLK, 0)
+        GPIO.output(ADC_DIO, 1);  time.sleep(0.000002)
+
+        dat1 = 0
+        for i in range(0, 8):
+                GPIO.output(ADC_CLK, 1);  time.sleep(0.000002)
+                GPIO.output(ADC_CLK, 0);  time.sleep(0.000002)
+                GPIO.setup(ADC_DIO, GPIO.IN)
+                dat1 = dat1 << 1 | GPIO.input(ADC_DIO)  # or ?
+
+        dat2 = 0
+        for i in range(0, 8):
+                dat2 = dat2 | GPIO.input(ADC_DIO) << i
+                GPIO.output(ADC_CLK, 1);  time.sleep(0.000002)
+                GPIO.output(ADC_CLK, 0);  time.sleep(0.000002)
+
+        GPIO.output(ADC_CS, 1)
+        GPIO.setup(ADC_DIO, GPIO.OUT)
+
+        if dat1 == dat2:
+                return dat1
+        else:
+                return 0
+
+def get_sensor_data():
+        while True:
+                res = getResult()
+                print('res = %d' % res)
+                time.sleep(0.4)
+
+if __name__ == '__main__':
+        setup()
+        try:
+                get_sensor_data()
+        except KeyboardInterrupt:
+                destroy()
+
+# Loop to publish messages
+while True:
+    # Get sensor data
+    sensor_data = get_sensor_data()
+
+    # Publish the sensor data to the MQTT topic
+    mqtt_client.publish(mqtt_topic, sensor_data, qos=0)
+    print(f"Published message to MQTT topic {mqtt_topic}: {sensor_data}")
+
+    # Publish the sensor data to the Redis Pub/Sub channel
+    r.publish(redis_channel, sensor_data)
+    print(f"Published message to Redis channel {redis_channel}: {sensor_data}")
+
+    # Wait for some time before publishing the next message
+    time.sleep(5)
+
